@@ -1,4 +1,5 @@
 import "./styles.css";
+import { audio } from "./audio";
 import { firstRoom } from "./content/rooms";
 import { t, type TextKey } from "./i18n";
 import { gameStore } from "./store";
@@ -17,8 +18,17 @@ let longPressActive = false;
 let suppressClicksUntil = 0;
 let repairDoorTimer = 0;
 let repairFinishTimer = 0;
+let lastRenderedLayer: LayerId | null = null;
+let typewriterRunId = 0;
 
 document.title = t("app.title");
+window.addEventListener(
+  "pointerdown",
+  () => {
+    audio.ensureStarted();
+  },
+  { once: true }
+);
 gameStore.subscribe(render);
 gameStore.on("repairStarted", scheduleRepair);
 
@@ -27,66 +37,86 @@ render();
 function render(): void {
   const state = gameStore.getState();
   appRoot.replaceChildren();
+  appRoot.className = `app-root phase-${state.phase}`;
 
   if (state.phase === "intro") {
     appRoot.append(renderIntro());
+    startTypewriters();
     return;
   }
 
   if (state.phase === "continued") {
     appRoot.append(renderContinued());
+    startTypewriters();
     return;
   }
 
   appRoot.append(renderGame(room));
+  startTypewriters();
 }
 
 function renderIntro(): HTMLElement {
   const screen = element("main", "intro-screen");
+  screen.classList.add("screen-in");
   const title = element("h1", "intro-title");
   title.textContent = t("app.title");
+  const clock = renderClockMark("title-clock");
   const text = element("p", "intro-text");
+  text.dataset.typewriter = "true";
   text.textContent = t("intro.text");
   const enterButton = textButton("intro.enter", "primary-button", () => {
     gameStore.enterRoom();
   });
 
-  screen.append(title, text, enterButton);
+  screen.append(renderSoundToggle(), title, clock, text, enterButton);
   return screen;
 }
 
 function renderContinued(): HTMLElement {
   const screen = element("main", "continued-screen");
+  screen.classList.add("screen-in");
   const title = element("h1", "continued-title");
   title.textContent = t("continued.title");
   const body = element("p", "continued-body");
+  body.dataset.typewriter = "true";
   body.textContent = t("continued.body");
   const note = element("p", "continued-note");
+  note.dataset.typewriter = "true";
   note.textContent = t("continued.note");
   const restartButton = textButton("action.restart", "secondary-button", () => {
     clearRepairTimers();
     gameStore.reset();
   });
 
-  screen.append(title, body, note, restartButton);
+  screen.append(renderSoundToggle(), renderClockMark("title-clock"), title, body, note, restartButton);
   return screen;
 }
 
 function renderGame(activeRoom: Room): HTMLElement {
   const state = gameStore.getState();
   const shell = element("main", "game-shell");
+  shell.classList.add(`phase-${state.phase}`);
   const visibleLayer = state.peekLayer ?? state.activeLayer;
+  const layerChanged = lastRenderedLayer !== null && lastRenderedLayer !== visibleLayer;
+  lastRenderedLayer = visibleLayer;
 
   if (state.debug) {
     shell.classList.add("is-debug");
+  }
+  if (state.doorRevealed) {
+    shell.classList.add("has-clock-tick");
+  }
+  if (layerChanged) {
+    shell.classList.add("is-layer-flash");
   }
 
   const topBar = element("header", "top-bar");
   const location = element("div", "location-label");
   location.textContent = t("object.room");
+  const clockMark = renderClockMark("top-clock");
   const layerChip = element("div", "layer-chip");
   layerChip.textContent = t(visibleLayer === "photo" ? "layer.photo" : "layer.now");
-  topBar.append(location, layerChip);
+  topBar.append(location, clockMark, layerChip, renderSoundToggle());
 
   const stageShell = element("section", "stage-shell");
   const stage = renderStage(activeRoom, visibleLayer);
@@ -124,6 +154,9 @@ function renderStage(activeRoom: Room, visibleLayer: LayerId): HTMLElement {
   if (state.phase === "repairing") {
     stage.classList.add("is-repairing");
   }
+  if (state.doorRevealed) {
+    stage.classList.add("has-clock-tick");
+  }
 
   const background = element("div", "scene-background");
   background.classList.add(`shape-${activeRoom.background.fallbackShape.kind}`);
@@ -141,7 +174,7 @@ function renderStage(activeRoom: Room, visibleLayer: LayerId): HTMLElement {
   stage.append(background, layer);
 
   if (visibleLayer === "photo") {
-    stage.append(element("div", "photo-grain"), element("div", "photo-vignette"));
+    stage.append(element("div", "photo-paper-edge"), element("div", "photo-grain"), element("div", "photo-vignette"));
   }
 
   const stageBanner = renderStageBanner();
@@ -228,6 +261,7 @@ function renderStageBanner(): HTMLElement | null {
 function renderBanner(key: TextKey, action: HTMLButtonElement | null): HTMLElement {
   const banner = element("div", "stage-banner");
   const text = element("p", "stage-banner-text");
+  text.dataset.typewriter = "true";
   text.textContent = t(key);
   banner.append(text);
   if (action) {
@@ -261,11 +295,17 @@ function renderDrawer(activeRoom: Room): HTMLElement {
 
   drawer.append(controls);
 
+  if (state.phase === "accuseReason") {
+    drawer.append(renderReasonChoices(foundAnomalies));
+    return drawer;
+  }
+
   if (state.flavorTextKey) {
     const flavor = element("div", "flavor-line");
     const flavorTitle = element("span", "flavor-title");
     flavorTitle.textContent = t("drawer.flavorTitle");
     const flavorText = element("span", "flavor-text");
+    flavorText.dataset.typewriter = "true";
     flavorText.textContent = t(state.flavorTextKey);
     flavor.append(flavorTitle, flavorText);
     drawer.append(flavor);
@@ -291,10 +331,6 @@ function renderDrawer(activeRoom: Room): HTMLElement {
   }
 
   drawer.append(memo);
-
-  if (state.phase === "accuseReason") {
-    drawer.append(renderReasonChoices(foundAnomalies));
-  }
 
   return drawer;
 }
@@ -348,6 +384,7 @@ function renderDebugPanel(activeRoom: Room): HTMLElement {
 }
 
 function handleObjectClick(sceneObject: SceneObject, visibleLayer: LayerId): void {
+  audio.play("tap");
   if (Date.now() < suppressClicksUntil) {
     return;
   }
@@ -370,7 +407,9 @@ function handleObjectClick(sceneObject: SceneObject, visibleLayer: LayerId): voi
     if (visibleLayer === "photo" && sceneObject.anomalyId) {
       const anomaly = room.anomalies.find((candidate) => candidate.id === sceneObject.anomalyId);
       if (anomaly) {
-        gameStore.addAnomaly(anomaly.id, anomaly.toastTextKey);
+        if (gameStore.addAnomaly(anomaly.id, anomaly.toastTextKey)) {
+          audio.play("memo");
+        }
       }
       return;
     }
@@ -382,10 +421,12 @@ function handleObjectClick(sceneObject: SceneObject, visibleLayer: LayerId): voi
 function submitReason(reasonId: string): void {
   const state = gameStore.getState();
   if (state.selectedSpotId === room.lie.spotId && reasonId === room.lie.reasonId) {
+    audio.play("success");
     gameStore.startRepair();
     return;
   }
 
+  audio.play("wrong");
   gameStore.wrongAnswer();
 }
 
@@ -409,6 +450,7 @@ function handleStagePointerDown(event: PointerEvent): void {
   pressTimer = window.setTimeout(() => {
     longPressActive = true;
     suppressClicksUntil = Date.now() + 500;
+    audio.play("tap");
     gameStore.setPeekLayer(oppositeLayer(gameStore.getState().activeLayer));
   }, 300);
 
@@ -439,7 +481,8 @@ function scheduleRepair(): void {
   clearRepairTimers();
   repairDoorTimer = window.setTimeout(() => {
     gameStore.revealDoor();
-  }, 1150);
+    audio.play("clock");
+  }, 3800);
 }
 
 function finishRepairNow(): void {
@@ -456,8 +499,71 @@ function textButton(key: TextKey, className: string, onClick: () => void): HTMLB
   const button = element("button", className);
   button.type = "button";
   button.textContent = t(key);
-  button.addEventListener("click", onClick);
+  button.addEventListener("click", () => {
+    audio.play("tap");
+    onClick();
+  });
   return button;
+}
+
+function renderSoundToggle(): HTMLButtonElement {
+  const button = textButton(audio.isMuted() ? "sound.off" : "sound.on", "sound-toggle", () => {
+    audio.toggleMuted();
+    render();
+  });
+  button.setAttribute("aria-pressed", String(!audio.isMuted()));
+  return button;
+}
+
+function renderClockMark(className: string): HTMLElement {
+  const state = gameStore.getState();
+  const clock = element("div", `clock-mark ${className}`);
+  if (state.doorRevealed) {
+    clock.classList.add("is-ticked");
+  }
+  const face = element("span", "clock-face");
+  const hand = element("span", "clock-hand");
+  const label = element("span", "clock-label");
+  label.textContent = t("clock.zero");
+  clock.append(face, hand, label);
+  return clock;
+}
+
+function startTypewriters(): void {
+  const currentRunId = (typewriterRunId += 1);
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    return;
+  }
+
+  const targets = [...appRoot.querySelectorAll<HTMLElement>("[data-typewriter='true']")];
+  for (const target of targets) {
+    const fullText = target.textContent ?? "";
+    if (fullText.length === 0) {
+      continue;
+    }
+    target.textContent = "";
+    target.classList.add("is-typing");
+    let index = 0;
+    let finished = false;
+    const finish = (): void => {
+      finished = true;
+      target.textContent = fullText;
+      target.classList.remove("is-typing");
+    };
+    const interval = window.setInterval(() => {
+      if (currentRunId !== typewriterRunId || finished) {
+        window.clearInterval(interval);
+        return;
+      }
+      index += 1;
+      target.textContent = fullText.slice(0, index);
+      if (index >= fullText.length) {
+        window.clearInterval(interval);
+        target.classList.remove("is-typing");
+      }
+    }, 28);
+    target.addEventListener("click", finish, { once: true });
+  }
 }
 
 function element<K extends keyof HTMLElementTagNameMap>(tagName: K, className: string): HTMLElementTagNameMap[K] {
