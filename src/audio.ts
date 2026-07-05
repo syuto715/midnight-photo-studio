@@ -1,4 +1,4 @@
-type SoundName = "tap" | "memo" | "success" | "wrong" | "clock";
+type SoundName = "tap" | "memo" | "success" | "wrong" | "clock" | "coin" | "stamp" | "ignite";
 
 type AudioConstructor = typeof AudioContext;
 
@@ -136,6 +136,67 @@ function playClockTick(context: AudioContext): void {
   source.stop(now + 0.035);
 }
 
+function playCoin(context: AudioContext): void {
+  const now = context.currentTime;
+  const master = context.createGain();
+  master.gain.setValueAtTime(0.0001, now);
+  master.gain.exponentialRampToValueAtTime(0.055, now + 0.012);
+  master.gain.exponentialRampToValueAtTime(0.0001, now + 0.55);
+  master.connect(context.destination);
+
+  for (const [frequency, offset] of [
+    [1280, 0],
+    [1720, 0.025]
+  ] as const) {
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    oscillator.type = "sine";
+    oscillator.frequency.setValueAtTime(frequency, now + offset);
+    gain.gain.setValueAtTime(0.55, now + offset);
+    oscillator.connect(gain);
+    gain.connect(master);
+    oscillator.start(now + offset);
+    oscillator.stop(now + offset + 0.18);
+  }
+}
+
+function playStamp(context: AudioContext): void {
+  const now = context.currentTime;
+  const noise = context.createBufferSource();
+  const filter = context.createBiquadFilter();
+  const gain = context.createGain();
+  noise.buffer = createNoiseBuffer(context, 0.18, 0.8);
+  filter.type = "lowpass";
+  filter.frequency.setValueAtTime(340, now);
+  gain.gain.setValueAtTime(0.0001, now);
+  gain.gain.exponentialRampToValueAtTime(0.07, now + 0.015);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.18);
+  noise.connect(filter);
+  filter.connect(gain);
+  gain.connect(context.destination);
+  noise.start(now);
+  noise.stop(now + 0.2);
+}
+
+function playIgnite(context: AudioContext): void {
+  const now = context.currentTime;
+  const source = context.createBufferSource();
+  const filter = context.createBiquadFilter();
+  const gain = context.createGain();
+  source.buffer = createNoiseBuffer(context, 0.22, 0.45);
+  filter.type = "bandpass";
+  filter.frequency.setValueAtTime(1800, now);
+  filter.frequency.exponentialRampToValueAtTime(4200, now + 0.12);
+  gain.gain.setValueAtTime(0.0001, now);
+  gain.gain.exponentialRampToValueAtTime(0.032, now + 0.02);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.22);
+  source.connect(filter);
+  filter.connect(gain);
+  gain.connect(context.destination);
+  source.start(now);
+  source.stop(now + 0.24);
+}
+
 export const audio = {
   ensureStarted(): void {
     void getAudioContext();
@@ -169,8 +230,14 @@ export const audio = {
         playBell(context);
       } else if (soundName === "wrong") {
         playDullHit(context);
-      } else {
+      } else if (soundName === "clock") {
         playClockTick(context);
+      } else if (soundName === "coin") {
+        playCoin(context);
+      } else if (soundName === "stamp") {
+        playStamp(context);
+      } else {
+        playIgnite(context);
       }
     } catch {
       return;

@@ -2,8 +2,19 @@ import "./styles.css";
 import { audio } from "./audio";
 import { firstRoom } from "./content/rooms";
 import { t, type TextKey } from "./i18n";
-import { gameStore } from "./store";
-import type { Anomaly, LayerId, Room, SceneObject } from "./types";
+import { compareDoorState, gameStore } from "./store";
+import type {
+  CandlesPuzzleDefinition,
+  GameState,
+  LayerId,
+  MemoEntry,
+  PuzzleDefinition,
+  PuzzleId,
+  Room,
+  SceneObject,
+  SeatActor,
+  SeatsPuzzleDefinition
+} from "./types";
 
 const app = document.querySelector<HTMLDivElement>("#app");
 
@@ -17,9 +28,9 @@ let pressTimer = 0;
 let longPressActive = false;
 let suppressClicksUntil = 0;
 let repairDoorTimer = 0;
-let repairFinishTimer = 0;
 let lastRenderedLayer: LayerId | null = null;
 let typewriterRunId = 0;
+let lastStampedPuzzleId: PuzzleId | null = null;
 
 document.title = t("app.title");
 window.addEventListener(
@@ -39,14 +50,26 @@ function render(): void {
   appRoot.replaceChildren();
   appRoot.className = `app-root phase-${state.phase}`;
 
-  if (state.phase === "intro") {
-    appRoot.append(renderIntro());
+  if (state.phase === "introEnvelope") {
+    appRoot.append(renderEnvelopeIntro());
     startTypewriters();
     return;
   }
 
-  if (state.phase === "continued") {
-    appRoot.append(renderContinued());
+  if (state.phase === "introTitle") {
+    appRoot.append(renderIntroTitle());
+    startTypewriters();
+    return;
+  }
+
+  if (state.phase === "puzzleCard" || state.phase === "stampCard") {
+    appRoot.append(renderPuzzleCard(state.phase === "stampCard"));
+    startTypewriters();
+    return;
+  }
+
+  if (state.phase === "chapterClear") {
+    appRoot.append(renderChapterClear());
     startTypewriters();
     return;
   }
@@ -55,7 +78,24 @@ function render(): void {
   startTypewriters();
 }
 
-function renderIntro(): HTMLElement {
+function renderEnvelopeIntro(): HTMLElement {
+  const screen = element("main", "intro-screen envelope-screen");
+  screen.classList.add("screen-in");
+  screen.append(renderSoundToggle());
+  const envelope = element("img", "intro-envelope");
+  envelope.src = "/assets/envelope.png";
+  envelope.alt = "";
+  const text = element("p", "intro-text");
+  text.dataset.typewriter = "true";
+  text.textContent = t(room.story.envelopeTextKey);
+  const enterButton = textButton("action.continue", "primary-button", () => {
+    gameStore.openTitle();
+  });
+  screen.append(envelope, text, enterButton);
+  return screen;
+}
+
+function renderIntroTitle(): HTMLElement {
   const screen = element("main", "intro-screen");
   screen.classList.add("screen-in");
   const title = element("h1", "intro-title");
@@ -63,32 +103,81 @@ function renderIntro(): HTMLElement {
   const clock = renderClockMark("title-clock");
   const text = element("p", "intro-text");
   text.dataset.typewriter = "true";
-  text.textContent = t("intro.text");
-  const enterButton = textButton("intro.enter", "primary-button", () => {
-    gameStore.enterRoom();
-  });
-
-  screen.append(renderSoundToggle(), title, clock, text, enterButton);
+  text.textContent = t(room.story.titleTextKey);
+  const actions = element("div", "intro-actions");
+  if (gameStore.hasSave()) {
+    actions.append(textButton("intro.resume", "primary-button", () => gameStore.loadGame()));
+  }
+  actions.append(textButton("intro.enter", gameStore.hasSave() ? "secondary-button" : "primary-button", () => gameStore.enterRoom()));
+  if (gameStore.hasSave()) {
+    actions.append(textButton("intro.restart", "ghost-button", () => gameStore.requestReset()));
+  }
+  screen.append(renderSoundToggle(), title, clock, text, actions);
+  if (gameStore.getState().resetConfirmOpen) {
+    screen.append(renderResetDialog());
+  }
   return screen;
 }
 
-function renderContinued(): HTMLElement {
-  const screen = element("main", "continued-screen");
+function renderResetDialog(): HTMLElement {
+  const dialog = element("div", "modal-backdrop");
+  const panel = element("section", "modal-panel");
+  const text = element("p", "modal-text");
+  text.textContent = t("intro.resetPrompt");
+  const controls = element("div", "modal-actions");
+  controls.append(
+    textButton("action.confirmReset", "accent-button", () => gameStore.clearSaveAndReset()),
+    textButton("action.cancelReset", "secondary-button", () => gameStore.cancelReset())
+  );
+  panel.append(text, controls);
+  dialog.append(panel);
+  return dialog;
+}
+
+function renderChapterClear(): HTMLElement {
+  const screen = element("main", "continued-screen clear-screen");
   screen.classList.add("screen-in");
   const title = element("h1", "continued-title");
-  title.textContent = t("continued.title");
-  const body = element("p", "continued-body");
-  body.dataset.typewriter = "true";
-  body.textContent = t("continued.body");
-  const note = element("p", "continued-note");
-  note.dataset.typewriter = "true";
-  note.textContent = t("continued.note");
-  const restartButton = textButton("action.restart", "secondary-button", () => {
-    clearRepairTimers();
-    gameStore.reset();
-  });
+  title.textContent = t(room.story.clearTitleKey);
+  screen.append(renderSoundToggle(), renderClockMark("title-clock"), title);
+  for (const key of room.story.clearBodyKeys) {
+    const line = element("p", "continued-body");
+    line.dataset.typewriter = "true";
+    line.textContent = t(key);
+    screen.append(line);
+  }
+  screen.append(textButton("action.restart", "secondary-button", () => gameStore.requestReset()));
+  if (gameStore.getState().resetConfirmOpen) {
+    screen.append(renderResetDialog());
+  }
+  return screen;
+}
 
-  screen.append(renderSoundToggle(), renderClockMark("title-clock"), title, body, note, restartButton);
+function renderPuzzleCard(stamped: boolean): HTMLElement {
+  const state = gameStore.getState();
+  const puzzle = getPuzzle(state.cardPuzzleId ?? state.activePuzzleId ?? "accuse");
+  if (stamped && lastStampedPuzzleId !== puzzle.id) {
+    lastStampedPuzzleId = puzzle.id;
+    audio.play("stamp");
+  }
+
+  const screen = element("main", `puzzle-card-screen ${stamped ? "is-stamped" : ""}`);
+  const card = element("section", "puzzle-card");
+  const number = element("p", "puzzle-number");
+  number.textContent = t(puzzle.numberTextKey);
+  const title = element("h1", "puzzle-title");
+  title.textContent = t(puzzle.titleTextKey);
+  title.dataset.typewriter = "true";
+  card.append(number, title);
+  if (stamped) {
+    const stamp = element("div", "stamp-mark");
+    stamp.textContent = t("stamp.restored");
+    card.append(stamp);
+    card.append(textButton("action.continue", "primary-button", () => gameStore.finishStamp()));
+  } else {
+    card.append(textButton("action.start", "primary-button", () => gameStore.startCardPuzzle()));
+  }
+  screen.append(renderSoundToggle(), card);
   return screen;
 }
 
@@ -103,7 +192,7 @@ function renderGame(activeRoom: Room): HTMLElement {
   if (state.debug) {
     shell.classList.add("is-debug");
   }
-  if (state.doorRevealed) {
+  if (state.doorState !== "hidden") {
     shell.classList.add("has-clock-tick");
   }
   if (layerChanged) {
@@ -114,16 +203,18 @@ function renderGame(activeRoom: Room): HTMLElement {
   const location = element("div", "location-label");
   location.textContent = t("object.room");
   const clockMark = renderClockMark("top-clock");
+  const coinCounter = element("div", "coin-counter");
+  coinCounter.textContent = `${t("drawer.coinCount")} ${getAvailableCoins(state)}/${activeRoom.coins.length}`;
   const layerChip = element("div", "layer-chip");
   layerChip.textContent = t(visibleLayer === "photo" ? "layer.photo" : "layer.now");
-  topBar.append(location, clockMark, layerChip, renderSoundToggle());
+  topBar.append(location, clockMark, coinCounter, layerChip);
 
   const stageShell = element("section", "stage-shell");
-  const stage = renderStage(activeRoom, visibleLayer);
+  const stage = state.activeCloseupId ? renderCloseup(activeRoom, visibleLayer) : renderStage(activeRoom, visibleLayer);
   stageShell.append(stage);
 
   const drawer = renderDrawer(activeRoom);
-  shell.append(topBar, stageShell, drawer);
+  shell.append(topBar, stageShell, drawer, renderSoundToggle());
 
   if (state.toastKey) {
     const toast = element("div", "toast");
@@ -143,6 +234,9 @@ function renderStage(activeRoom: Room, visibleLayer: LayerId): HTMLElement {
   const state = gameStore.getState();
   const stage = element("div", "stage");
   stage.classList.add(visibleLayer === "photo" ? "is-photo" : "is-now");
+  if (activeRoom.background.image) {
+    stage.classList.add("has-art");
+  }
   stage.dataset.layer = visibleLayer;
   stage.addEventListener("pointerdown", handleStagePointerDown);
   stage.addEventListener("contextmenu", (event) => event.preventDefault());
@@ -154,9 +248,10 @@ function renderStage(activeRoom: Room, visibleLayer: LayerId): HTMLElement {
   if (state.phase === "repairing") {
     stage.classList.add("is-repairing");
   }
-  if (state.doorRevealed) {
+  if (state.doorState !== "hidden") {
     stage.classList.add("has-clock-tick");
   }
+  stage.classList.add(`door-${state.doorState}`);
 
   const background = element("div", "scene-background");
   background.classList.add(`shape-${activeRoom.background.fallbackShape.kind}`);
@@ -166,7 +261,7 @@ function renderStage(activeRoom: Room, visibleLayer: LayerId): HTMLElement {
   }
 
   const layer = element("div", "scene-layer");
-  const objects = activeRoom.layers[visibleLayer].filter((sceneObject) => shouldRenderObject(sceneObject));
+  const objects = activeRoom.layers[visibleLayer].filter((sceneObject) => shouldRenderObject(sceneObject, state));
   for (const sceneObject of objects) {
     layer.append(renderSceneObject(sceneObject, visibleLayer));
   }
@@ -185,12 +280,61 @@ function renderStage(activeRoom: Room, visibleLayer: LayerId): HTMLElement {
   return stage;
 }
 
-function shouldRenderObject(sceneObject: SceneObject): boolean {
+function renderCloseup(activeRoom: Room, visibleLayer: LayerId): HTMLElement {
   const state = gameStore.getState();
-  if (sceneObject.appearsAfterRepair && !state.doorRevealed) {
+  const closeup = activeRoom.closeups.find((candidate) => candidate.id === state.activeCloseupId);
+  const stage = element("div", "stage closeup-stage");
+  stage.classList.add(visibleLayer === "photo" ? "is-photo" : "is-now");
+  if (!closeup) {
+    return stage;
+  }
+  const title = element("h2", "closeup-title");
+  title.textContent = t(closeup.titleTextKey);
+  const back = textButton("action.backRoom", "ghost-button closeup-back", () => gameStore.closeCloseup());
+  const layer = element("div", "scene-layer closeup-layer");
+  for (const sceneObject of closeup.layers[visibleLayer].filter((candidate) => shouldRenderObject(candidate, state))) {
+    layer.append(renderSceneObject(sceneObject, visibleLayer));
+  }
+  stage.append(title, back, layer);
+  if (visibleLayer === "photo") {
+    stage.append(element("div", "photo-paper-edge"), element("div", "photo-grain"), element("div", "photo-vignette"));
+  }
+  return stage;
+}
+
+function shouldRenderObject(sceneObject: SceneObject, state: GameState): boolean {
+  if (sceneObject.coinId && state.foundCoinIds.includes(sceneObject.coinId)) {
+    return false;
+  }
+  if (sceneObject.appearsAfterRepair && !state.repairedLie) {
     return false;
   }
   if (sceneObject.hiddenWhenRepaired && state.repairedLie && state.phase !== "repairing") {
+    return false;
+  }
+  if (sceneObject.visibleWhen && !matchesCondition(sceneObject.visibleWhen, state)) {
+    return false;
+  }
+  if (sceneObject.hiddenWhen && matchesCondition(sceneObject.hiddenWhen, state)) {
+    return false;
+  }
+  return true;
+}
+
+function matchesCondition(condition: NonNullable<SceneObject["visibleWhen"]>, state: GameState): boolean {
+  if (condition.repairedLie !== undefined && state.repairedLie !== condition.repairedLie) {
+    return false;
+  }
+  if (condition.minDoorState && !compareDoorState(state.doorState, condition.minDoorState)) {
+    return false;
+  }
+  if (condition.completedPuzzles?.some((puzzleId) => !state.completedPuzzleIds.includes(puzzleId))) {
+    return false;
+  }
+  if (condition.activePuzzleIds && (!state.activePuzzleId || !condition.activePuzzleIds.includes(state.activePuzzleId))) {
+    return false;
+  }
+  if (condition.foundMemoIds?.some((memoId) => !state.foundMemoIds.includes(memoId))) {
     return false;
   }
   return true;
@@ -201,6 +345,12 @@ function renderSceneObject(sceneObject: SceneObject, visibleLayer: LayerId): HTM
   const tagName = sceneObject.interactive === false ? "div" : "button";
   const node = element(tagName, "scene-object");
   node.classList.add(`shape-${sceneObject.fallbackShape.kind}`);
+  if (sceneObject.imageClass) {
+    node.classList.add(...sceneObject.imageClass.split(" ").filter(Boolean));
+  }
+  if (sceneObject.hitboxOnlyWithArt) {
+    node.classList.add("hitbox-with-art");
+  }
   node.style.setProperty("--x", `${sceneObject.rect.x}%`);
   node.style.setProperty("--y", `${sceneObject.rect.y}%`);
   node.style.setProperty("--w", `${sceneObject.rect.w}%`);
@@ -210,7 +360,30 @@ function renderSceneObject(sceneObject: SceneObject, visibleLayer: LayerId): HTM
 
   if (sceneObject.image) {
     node.classList.add("has-image");
-    node.style.backgroundImage = `url(${sceneObject.image})`;
+    const image = element("img", "object-image");
+    image.src = sceneObject.image;
+    image.alt = "";
+    image.addEventListener("error", () => {
+      node.classList.remove("has-image");
+      image.remove();
+    });
+    node.append(image);
+  }
+
+  if (sceneObject.coinId) {
+    node.classList.add("is-coin");
+  }
+
+  if (sceneObject.candleId) {
+    const lit = visibleLayer === "photo" ? sceneObject.lit : Boolean(state.candleStates[sceneObject.candleId]);
+    node.classList.toggle("is-lit", lit);
+  }
+
+  if (sceneObject.seatId) {
+    node.classList.add("seat-hotspot");
+    if (state.selectedSeatId === sceneObject.seatId) {
+      node.classList.add("is-selected-seat");
+    }
   }
 
   if (state.phase === "accuseSpot" && sceneObject.selectableForLie) {
@@ -222,13 +395,13 @@ function renderSceneObject(sceneObject: SceneObject, visibleLayer: LayerId): HTM
   }
 
   const label = element("span", "object-label");
-  label.textContent = t(sceneObject.fallbackShape.labelKey);
+  label.textContent = getObjectLabel(sceneObject, state);
   node.append(label);
 
   if (sceneObject.interactive !== false) {
     const button = node as HTMLButtonElement;
     button.type = "button";
-    button.setAttribute("aria-label", t(sceneObject.fallbackShape.labelKey));
+    button.setAttribute("aria-label", getObjectLabel(sceneObject, state));
     button.addEventListener("click", (event) => {
       event.stopPropagation();
       handleObjectClick(sceneObject, visibleLayer);
@@ -238,6 +411,14 @@ function renderSceneObject(sceneObject: SceneObject, visibleLayer: LayerId): HTM
   }
 
   return node;
+}
+
+function getObjectLabel(sceneObject: SceneObject, state: GameState): string {
+  const base = t(sceneObject.fallbackShape.labelKey);
+  if (sceneObject.seatId && state.seatAssignments[sceneObject.seatId]) {
+    return `${base}: ${t(getActorLabelKey(state.seatAssignments[sceneObject.seatId]))}`;
+  }
+  return base;
 }
 
 function renderStageBanner(): HTMLElement | null {
@@ -275,7 +456,7 @@ function renderDrawer(activeRoom: Room): HTMLElement {
   const drawer = element("section", "bottom-drawer");
   const controls = element("div", "control-row");
 
-  if (state.phase === "explore") {
+  if (state.phase === "explore" && !state.activeCloseupId) {
     const nextLayer = state.activeLayer === "now" ? "photo" : "now";
     controls.append(
       textButton(state.activeLayer === "now" ? "action.viewPhoto" : "action.returnNow", "primary-button", () => {
@@ -288,16 +469,29 @@ function renderDrawer(activeRoom: Room): HTMLElement {
     controls.append(textButton("action.cancel", "secondary-button", () => gameStore.cancelAccusation()));
   }
 
-  const foundAnomalies = getFoundAnomalies(activeRoom);
-  if (state.phase === "explore" && foundAnomalies.length >= 2 && !state.repairedLie) {
+  const foundMemos = getFoundMemos(activeRoom);
+  const accusePuzzle = getPuzzle("accuse");
+  if (
+    state.phase === "explore" &&
+    foundMemos.length >= accusePuzzle.requiredMemoCount &&
+    !state.completedPuzzleIds.includes("accuse")
+  ) {
     controls.append(textButton("action.accuse", "accent-button", () => gameStore.beginAccusation()));
   }
 
   drawer.append(controls);
 
+  if (state.activePuzzleId && state.phase === "explore") {
+    drawer.append(renderHintPanel(getPuzzle(state.activePuzzleId)));
+  }
+
   if (state.phase === "accuseReason") {
-    drawer.append(renderReasonChoices(foundAnomalies));
+    drawer.append(renderReasonChoices(foundMemos));
     return drawer;
+  }
+
+  if (state.selectedSeatId) {
+    drawer.append(renderSeatChoices(state.selectedSeatId));
   }
 
   if (state.flavorTextKey) {
@@ -316,15 +510,15 @@ function renderDrawer(activeRoom: Room): HTMLElement {
   memoTitle.textContent = t("drawer.memoTitle");
   memo.append(memoTitle);
 
-  if (foundAnomalies.length === 0) {
+  if (foundMemos.length === 0) {
     const empty = element("p", "memo-empty");
     empty.textContent = t("drawer.memoEmpty");
     memo.append(empty);
   } else {
     const list = element("ol", "memo-list");
-    for (const anomaly of foundAnomalies) {
+    for (const memoEntry of foundMemos) {
       const item = element("li", "memo-item");
-      item.textContent = t(anomaly.memoTextKey);
+      item.textContent = t(memoEntry.memoTextKey);
       list.append(item);
     }
     memo.append(list);
@@ -335,20 +529,67 @@ function renderDrawer(activeRoom: Room): HTMLElement {
   return drawer;
 }
 
-function renderReasonChoices(foundAnomalies: Anomaly[]): HTMLElement {
+function renderHintPanel(puzzle: PuzzleDefinition): HTMLElement {
+  const state = gameStore.getState();
+  const panel = element("div", "hint-panel");
+  const title = element("h2", "hint-title");
+  title.textContent = t("drawer.hintTitle");
+  panel.append(title);
+  const unlocked = state.hintsUnlocked[puzzle.id] ?? 0;
+  if (unlocked === 0) {
+    const empty = element("p", "memo-empty");
+    empty.textContent = t(puzzle.hints[0]);
+    empty.classList.add("hint-locked");
+    panel.append(empty);
+  } else {
+    const list = element("ol", "hint-list");
+    for (const key of puzzle.hints.slice(0, unlocked)) {
+      const item = element("li", "hint-item");
+      item.textContent = t(key);
+      list.append(item);
+    }
+    panel.append(list);
+  }
+  if (unlocked < puzzle.hints.length) {
+    panel.append(textButton("action.useCoin", "secondary-button", () => {
+      if (gameStore.unlockHint(puzzle.id)) {
+        audio.play("coin");
+      }
+    }));
+  }
+  return panel;
+}
+
+function renderReasonChoices(foundMemos: MemoEntry[]): HTMLElement {
   const choices = element("div", "reason-panel");
   const prompt = element("p", "reason-prompt");
   prompt.textContent = t("stage.accuseReason");
   choices.append(prompt);
 
-  for (const anomaly of foundAnomalies) {
-    const choice = textButton(anomaly.memoTextKey, "reason-button", () => {
-      submitReason(anomaly.id);
+  for (const memoEntry of foundMemos) {
+    const choice = textButton(memoEntry.memoTextKey, "reason-button", () => {
+      submitReason(memoEntry.id);
     });
     choices.append(choice);
   }
 
   return choices;
+}
+
+function renderSeatChoices(seatId: string): HTMLElement {
+  const puzzle = getPuzzle("seats");
+  const panel = element("div", "seat-panel");
+  const title = element("h2", "seat-title");
+  title.textContent = `${t("drawer.seatTitle")} - ${t(getSeatLabelKey(seatId))}`;
+  panel.append(title);
+  for (const actor of puzzle.actors) {
+    panel.append(commandButton(t(actor.labelKey), "reason-button seat-choice", () => {
+      gameStore.assignSeat(seatId, actor.id);
+      audio.play("tap");
+      maybeCompleteSeats();
+    }));
+  }
+  return panel;
 }
 
 function renderDebugPanel(activeRoom: Room): HTMLElement {
@@ -358,7 +599,7 @@ function renderDebugPanel(activeRoom: Room): HTMLElement {
   const answer = element("span", "debug-answer");
   answer.textContent = t("debug.answer");
   const unlock = textButton("debug.unlock", "debug-button", () => {
-    gameStore.unlockAll(activeRoom.anomalies.map((anomaly) => anomaly.id));
+    gameStore.unlockAll(activeRoom.anomalies.map((memoEntry) => memoEntry.id));
   });
   const now = textButton("debug.now", "debug-button", () => {
     gameStore.enterRoom();
@@ -369,26 +610,29 @@ function renderDebugPanel(activeRoom: Room): HTMLElement {
     gameStore.setLayer("photo");
   });
   const accuse = textButton("debug.accuse", "debug-button", () => {
-    gameStore.unlockAll(activeRoom.anomalies.map((anomaly) => anomaly.id));
+    gameStore.unlockAll(activeRoom.anomalies.slice(0, 3).map((memoEntry) => memoEntry.id));
     gameStore.beginAccusation();
   });
   const repair = textButton("debug.repair", "debug-button", () => {
-    gameStore.startRepair();
+    gameStore.completePuzzle("accuse");
   });
-  const continued = textButton("debug.continued", "debug-button", () => {
-    gameStore.finishRepair();
+  const candles = textButton("debug.candles", "debug-button", () => {
+    gameStore.debugCompleteCandles();
+  });
+  const clear = textButton("debug.continued", "debug-button", () => {
+    gameStore.completePuzzle("seats");
   });
 
-  panel.append(title, answer, unlock, now, photo, accuse, repair, continued);
+  panel.append(title, answer, unlock, now, photo, accuse, repair, candles, clear);
   return panel;
 }
 
 function handleObjectClick(sceneObject: SceneObject, visibleLayer: LayerId): void {
-  audio.play("tap");
   if (Date.now() < suppressClicksUntil) {
     return;
   }
 
+  audio.play("tap");
   const state = gameStore.getState();
   if (state.phase === "repairing") {
     return;
@@ -403,26 +647,45 @@ function handleObjectClick(sceneObject: SceneObject, visibleLayer: LayerId): voi
     return;
   }
 
-  if (state.phase === "explore" || state.phase === "repairMessage") {
-    if (visibleLayer === "photo" && sceneObject.anomalyId) {
-      const anomaly = room.anomalies.find((candidate) => candidate.id === sceneObject.anomalyId);
-      if (anomaly) {
-        if (gameStore.addAnomaly(anomaly.id, anomaly.toastTextKey)) {
-          audio.play("memo");
-        }
-      }
-      return;
+  if (visibleLayer === "photo" && sceneObject.anomalyId && !state.foundMemoIds.includes(sceneObject.anomalyId)) {
+    const memoEntry = room.anomalies.find((candidate) => candidate.id === sceneObject.anomalyId);
+    if (memoEntry && gameStore.addMemo(memoEntry.id, memoEntry.toastTextKey)) {
+      audio.play("memo");
     }
+    return;
+  }
 
+  const interaction = sceneObject.interaction;
+  if (!interaction || interaction.kind === "inspect") {
     gameStore.inspect(sceneObject.inspectTextKey);
+    return;
+  }
+
+  if (interaction.kind === "collectCoin") {
+    if (gameStore.collectCoin(interaction.coinId)) {
+      audio.play("coin");
+    }
+  } else if (interaction.kind === "openCloseup") {
+    gameStore.openCloseup(interaction.closeupId);
+  } else if (interaction.kind === "toggleCandle") {
+    gameStore.toggleCandle(interaction.candleId);
+    audio.play("ignite");
+    maybeCompleteCandles();
+  } else if (interaction.kind === "addMemo") {
+    if (gameStore.addMemos(interaction.memoIds, interaction.toastTextKey)) {
+      audio.play("memo");
+    }
+  } else if (interaction.kind === "assignSeat") {
+    gameStore.selectSeat(interaction.seatId);
   }
 }
 
 function submitReason(reasonId: string): void {
   const state = gameStore.getState();
-  if (state.selectedSpotId === room.lie.spotId && reasonId === room.lie.reasonId) {
+  const accusePuzzle = getPuzzle("accuse");
+  if (state.selectedSpotId === accusePuzzle.spotId && reasonId === accusePuzzle.reasonId) {
     audio.play("success");
-    gameStore.startRepair();
+    gameStore.completePuzzle("accuse");
     return;
   }
 
@@ -430,9 +693,54 @@ function submitReason(reasonId: string): void {
   gameStore.wrongAnswer();
 }
 
-function getFoundAnomalies(activeRoom: Room): Anomaly[] {
+function maybeCompleteCandles(): void {
   const state = gameStore.getState();
-  return activeRoom.anomalies.filter((anomaly) => state.foundAnomalyIds.includes(anomaly.id));
+  if (state.activePuzzleId !== "candles" || state.completedPuzzleIds.includes("candles")) {
+    return;
+  }
+  const puzzle = getPuzzle("candles");
+  const solved = puzzle.candleIds.every((candleId) => Boolean(state.candleStates[candleId]) === puzzle.targetPattern[candleId]);
+  if (solved) {
+    audio.play("success");
+    gameStore.completePuzzle("candles");
+  }
+}
+
+function maybeCompleteSeats(): void {
+  const state = gameStore.getState();
+  if (state.activePuzzleId !== "seats" || state.completedPuzzleIds.includes("seats")) {
+    return;
+  }
+  const puzzle = getPuzzle("seats");
+  const filled = puzzle.seatIds.every((seatId) => state.seatAssignments[seatId]);
+  if (!filled) {
+    return;
+  }
+  const solved = puzzle.seatIds.every((seatId) => state.seatAssignments[seatId] === puzzle.correctAssignments[seatId]);
+  if (solved) {
+    audio.play("success");
+    gameStore.completePuzzle("seats");
+  } else {
+    audio.play("wrong");
+    gameStore.seatMismatch();
+  }
+}
+
+function getFoundMemos(activeRoom: Room): MemoEntry[] {
+  const state = gameStore.getState();
+  return activeRoom.anomalies.filter((memoEntry) => state.foundMemoIds.includes(memoEntry.id));
+}
+
+function getPuzzle(id: "accuse"): Extract<PuzzleDefinition, { type: "accuse" }>;
+function getPuzzle(id: "candles"): CandlesPuzzleDefinition;
+function getPuzzle(id: "seats"): SeatsPuzzleDefinition;
+function getPuzzle(id: PuzzleId): PuzzleDefinition;
+function getPuzzle(id: PuzzleId): PuzzleDefinition {
+  return room.puzzles[id];
+}
+
+function getAvailableCoins(state: GameState): number {
+  return Math.max(0, state.foundCoinIds.length - state.coinsSpent);
 }
 
 function handleStagePointerDown(event: PointerEvent): void {
@@ -486,19 +794,28 @@ function scheduleRepair(): void {
 }
 
 function finishRepairNow(): void {
+  const state = gameStore.getState();
   clearRepairTimers();
-  gameStore.finishRepair();
+  if (state.phase === "repairing") {
+    gameStore.revealDoor();
+    audio.play("clock");
+    return;
+  }
+  gameStore.finishRepairMessage();
 }
 
 function clearRepairTimers(): void {
   window.clearTimeout(repairDoorTimer);
-  window.clearTimeout(repairFinishTimer);
 }
 
 function textButton(key: TextKey, className: string, onClick: () => void): HTMLButtonElement {
+  return commandButton(t(key), className, onClick);
+}
+
+function commandButton(text: string, className: string, onClick: () => void): HTMLButtonElement {
   const button = element("button", className);
   button.type = "button";
-  button.textContent = t(key);
+  button.textContent = text;
   button.addEventListener("click", () => {
     audio.play("tap");
     onClick();
@@ -518,7 +835,7 @@ function renderSoundToggle(): HTMLButtonElement {
 function renderClockMark(className: string): HTMLElement {
   const state = gameStore.getState();
   const clock = element("div", `clock-mark ${className}`);
-  if (state.doorRevealed) {
+  if (state.doorState !== "hidden") {
     clock.classList.add("is-ticked");
   }
   const face = element("span", "clock-face");
@@ -527,6 +844,14 @@ function renderClockMark(className: string): HTMLElement {
   label.textContent = t("clock.zero");
   clock.append(face, hand, label);
   return clock;
+}
+
+function getActorLabelKey(actor: SeatActor): TextKey {
+  return `actor.${actor}` as TextKey;
+}
+
+function getSeatLabelKey(seatId: string): TextKey {
+  return `seat.${seatId.slice(-1)}` as TextKey;
 }
 
 function startTypewriters(): void {

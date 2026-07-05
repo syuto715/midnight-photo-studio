@@ -28,7 +28,7 @@
    (英訳の中身は後回し可)。コード内のハードコード文字列は禁止。
 5. **ゲーム状態は単一ストア+イベント。** GameState(発見済み矛盾、修復済みの嘘、
    フラグ類)を1箇所に集約。演出はイベント購読で発火させる。
-6. **セーブは localStorage、schemaVersion 付き。**(実装時期はプロンプト指示に従う)
+6. **セーブは localStorage、schemaVersion 付き。**
 
 ## データモデル(概略)
 - Room { id, background, layers: { now: SceneObject[], photo: SceneObject[] },

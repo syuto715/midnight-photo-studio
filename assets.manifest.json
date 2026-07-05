@@ -8,7 +8,7 @@
   },
   "discarded": [
     {
-      "file": "tmp/imagegen/sources/candelabra-retake-discarded.png",
+      "file": "not retained: first candelabra generation",
       "reason": "The first candelabra generation produced a multi-arm holder, unsuitable for four independent candle puzzle objects."
     }
   ],
