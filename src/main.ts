@@ -257,7 +257,14 @@ function renderStage(activeRoom: Room, visibleLayer: LayerId): HTMLElement {
   background.classList.add(`shape-${activeRoom.background.fallbackShape.kind}`);
   setShapeStyle(background, activeRoom.background.fallbackShape.color, activeRoom.background.fallbackShape.accent);
   if (activeRoom.background.image) {
-    background.style.backgroundImage = `url(${activeRoom.background.image})`;
+    const backgroundImage = element("img", "scene-bg-image");
+    backgroundImage.src = activeRoom.background.image;
+    backgroundImage.alt = "";
+    backgroundImage.addEventListener("error", () => {
+      stage.classList.remove("has-art");
+      backgroundImage.remove();
+    });
+    background.append(backgroundImage);
   }
 
   const layer = element("div", "scene-layer");
