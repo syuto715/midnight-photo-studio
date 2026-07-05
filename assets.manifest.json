@@ -1,0 +1,66 @@
+{
+  "generatedAt": "2026-07-05",
+  "mode": "built-in image_gen plus local chroma-key removal",
+  "totalGeneratedImages": 8,
+  "acceptedImages": 7,
+  "retakes": {
+    "candelabra": 1
+  },
+  "discarded": [
+    {
+      "file": "tmp/imagegen/sources/candelabra-retake-discarded.png",
+      "reason": "The first candelabra generation produced a multi-arm holder, unsuitable for four independent candle puzzle objects."
+    }
+  ],
+  "assets": [
+    {
+      "file": "public/assets/bg-dining.png",
+      "purpose": "Dining room background, current and photo layers",
+      "size": "1536x1024",
+      "transparent": false,
+      "prompt": "1920s western mansion dining room seen from the doorway, long empty wooden table, large ornate wall mirror on the back wall above a sideboard, a tall curtained window on the left wall, empty wall space for a small clock, tall dark wallpaper, dark academia storybook illustration, muted umber and sepia palette, soft painterly texture, dim warm candlelight, subtle film grain, no people, no chairs, no tableware, no candelabras, no text, no watermark"
+    },
+    {
+      "file": "public/assets/chair.png",
+      "purpose": "Chair sprite used for the four real chairs, the fifth false chair, and mirror reflections",
+      "size": "1393x1129",
+      "transparent": true,
+      "prompt": "Single antique wooden dining chair, 3/4 view, matching the perspective and warm left-side candle/window light of a 1920s western mansion dining room. Dark academia storybook illustration, muted umber and sepia palette, soft painterly texture, realistic scale for placement beside a long wooden dining table. Flat #00ff00 chroma-key background, no cast shadow, no text, no watermark."
+    },
+    {
+      "file": "public/assets/clock-face.png",
+      "purpose": "Clock body without hands; CSS renders hands/time state",
+      "size": "1254x1254",
+      "transparent": true,
+      "prompt": "Ornate antique mantel clock face and body with no hands, suitable as a small tabletop/wall-adjacent clock sprite in a 1920s western mansion dining room. Brass and dark wood details, storybook illustration, muted umber and sepia palette, flat #00ff00 chroma-key background, no text, no watermark."
+    },
+    {
+      "file": "public/assets/coin.png",
+      "purpose": "Silver coin collectible and hint currency UI",
+      "size": "1254x1254",
+      "transparent": true,
+      "prompt": "Old tarnished silver coin, top-down view, mysterious mansion token, worn rim and subtle engraved abstract crest, dark academia storybook illustration, muted silver with sepia patina, flat #00ff00 chroma-key background, no readable text, no watermark."
+    },
+    {
+      "file": "public/assets/candelabra.png",
+      "purpose": "Single unlit candlestick sprite duplicated for the four candle puzzle objects",
+      "size": "1254x1254",
+      "transparent": true,
+      "prompt": "Single unlit antique brass candlestick holder for one candle, no flame, no smoke, no glow, suitable to duplicate four times as separate puzzle objects on a 1920s mansion dining room table. Dark academia storybook illustration, flat #00ff00 chroma-key background, no text, no watermark."
+    },
+    {
+      "file": "public/assets/plate.png",
+      "purpose": "Silver plate clue object that opens the testimony memo for the seating puzzle",
+      "size": "1402x1122",
+      "transparent": true,
+      "prompt": "Old silver plate, shallow top-down perspective, slightly tarnished reflective metal, mysterious mansion dinnerware clue object. Dark academia storybook illustration, muted silver and sepia palette, flat #00ff00 chroma-key background, no food, no utensils, no text, no watermark."
+    },
+    {
+      "file": "public/assets/envelope.png",
+      "purpose": "Intro envelope prop",
+      "size": "1448x1086",
+      "transparent": true,
+      "prompt": "Old cream paper envelope, slightly open with aged edges, wax-seal impression but no readable text, mystery adventure story prop. Dark academia storybook illustration, muted paper and sepia palette, flat #00ff00 chroma-key background, no readable writing, no watermark."
+    }
+  ]
+}
